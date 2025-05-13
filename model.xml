@@ -1,0 +1,21 @@
+<mujoco>
+    <option gravity="0 0 0" />
+
+    <visual>
+        <headlight ambient="0.66 0.66 0.7" />
+    </visual>
+
+    <worldbody>
+        <geom type="plane" size="1000 1000 0.1" rgba="1 1 1 1" pos="0 0 -100">
+
+        </geom>
+
+        <!-- <body>
+            <geom type="sphere" pos="0 0 0" size="1 1 1" rgba="1 1 1 1" />
+            <geom type="sphere" pos="1 1 1" size="1 1 1" rgba="1 1 1 1" />
+        </body> -->
+
+        <!-- insert here -->
+
+    </worldbody>
+</mujoco>

@@ -3,3 +3,4 @@ MUJOCO_LOG*
 venv*
 modelDuplicate.xml
 molecules/*
+*.mol

@@ -1,9 +1,13 @@
 import numpy as np
 import mujoco
-import torch
 from chemlib import Element
+import math
 
 from scipy.spatial.transform import Rotation as R # type: ignore
+import scipy.spatial
+
+global num_elements
+num_elements = 0
 
 def getMolecularColor(abbreviatedName):
     colors = {
@@ -38,7 +42,13 @@ class Molecule():
         self.totalMass = 0
 
         def addAtom(line):
+            global num_elements
+
             line = [x for x in line.split(' ') if x != '']
+
+            if len(line) == 4 and line[0] == "dipole":
+                self.dipole = (float(line[1]), float(line[2]), float(line[3]))
+                return
 
             if len(line) < 4 or line[3][0] not in 'QWERTYUIOPASDFGHJKLZXCVBNM':
                 return
@@ -62,8 +72,10 @@ class Molecule():
             # print(element.properties['AtomicMass'])
 
             molecule.append(
-                '<geom type=\"sphere\" pos=\"' + pos + '\" size=\"' + size + '\" rgba=\"' + rgba + '\"/>'
+                '<geom name=\"' + line[3] + '_' + str(num_elements) + '\" type=\"sphere\" pos=\"' + pos + '\" size=\"' + size + '\" rgba=\"' + rgba + '\" contype=\"0\" conaffinity=\"0\"/>'
             )
+
+            num_elements += 1
 
         for line in fileText:
             addAtom(line)
@@ -78,37 +90,15 @@ class Molecule():
 
         self.appliedForce = (0, 0, 0)
 
-        # print(molecule)
-
-        # self.model = model
-        # self.data = data
-
-        # self.robot_qpos_addr = self.model.joint('robotfree' + str(id)).qposadr[0]
-
-        # self.predictedDistances = [
-        #     0,
-        #     0,
-        #     0,
-        #     0
-        # ]
-
-        # self.alpha = 0.91
-
-        # self.visualize = visualize
-        # if self.visualize:
-        #     self.physicalRays = [
-        #         self.model.geom('forward'),
-        #         self.model.geom('right'),
-        #         self.model.geom('backward'),
-        #         self.model.geom('left'),
-        #     ]
-
     def assignPhysics(self, model, data, id):
         self.model = model
         self.data = data
         self.id = id
 
-        self.robot_qpos_addr = self.model.joint('robotfree' + str(id)).qposadr[0]
+        self.robot_qpos_addr = self.id * 7
+        self.robot_qvel_addr = self.id * 6
+
+        # self.robot_qpos_addr = self.model.joint('robotfree' + str(id)).qposadr[0]
 
     def getElements(self):
         elements = []
@@ -118,47 +108,18 @@ class Molecule():
         # Loop over all geoms and collect those with matching body id
         for geom_id in range(self.model.ngeom):
             if self.model.geom_bodyid[geom_id] == body_id:
-                elements.append(self.data.geom_xpos[geom_id])
+                element = Element(mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_id).split('_')[0])
+                position = self.data.geom_xpos[geom_id]
+
+                # print(element.properties)
+
+                elements.append((position, element.properties['AtomicNumber']))
+                # print(element.properties)
             
         return elements
 
-    def getState(self, deltaPosition):
-        state = deltaPosition
-
-        # distances = self.getDistances()
-        # realDistances = [0] * len(distances)
-
-        # if self.visualize:
-        #     self.alterPhysicalRays(distances)
-
-        # for i, distance in enumerate(distances):
-        #     if distance[1] != -1:
-        #         realDistances[i] = distance[0]
-        
-        # self.updatePredictedDistances(realDistances)
-
-        # for distance in self.predictedDistances:
-        #     # maximum acceleration parameter, 1 is 100% or 144 inches
-        #     # if the robot is 10 inches from a wall, accelerate in at
-        #     max_accel = 4.0 / 144
-
-        #     optimalDistance = 30
-        #     distance = distance - optimalDistance
-
-        #     # state.append(min(max(1 / max(distance, 1e-6), -max_accel), max_accel))
-        #     state.append(2 * max_accel * distance / ((distance * distance) + 1))
-
-        # velocity = self.getVelocity()
-        # velocity[0] = velocity[0] / 100
-        # velocity[1] = velocity[1] / 100
-        # state.extend(velocity)
-        # # state.extend([0, 0])
-        # state = torch.Tensor(state)
-        return state
-
     def getPosition(self):
         simPos = self.data.qpos[self.robot_qpos_addr: self.robot_qpos_addr+3]
-        # print(simPos)
 
         return [
             simPos[0] + self.centerOfMass[0],
@@ -166,22 +127,31 @@ class Molecule():
             simPos[2] + self.centerOfMass[2],
         ]
 
+    def getDipole(self):
+        vector = np.array(self.dipole)
+
+        if np.linalg.norm(vector) == 0: return None
+
+        rotation = R.align_vectors([0, 0, -1.85], vector)[0]
+        return rotation
+
     def getVelocity(self):
-        return self.data.qvel[self.robot_qpos_addr: self.robot_qpos_addr+3]
+        return self.data.qvel[self.robot_qvel_addr: self.robot_qvel_addr+3]
     
     def getAcceleration(self):
-        return self.data.qacc[self.robot_qpos_addr: self.robot_qpos_addr+3]
+        return self.data.qacc[self.robot_qvel_addr: self.robot_qvel_addr+3]
 
-    def setPosition(self, x, y):
-        self.data.qpos[self.robot_qpos_addr    ] = x  # x-axis position
-        self.data.qpos[self.robot_qpos_addr + 1] = y  # y-axis position
+    def setPosition(self, x, y, z):
+        self.data.qpos[self.robot_qpos_addr    ] = x - self.centerOfMass[0]  # x-axis position
+        self.data.qpos[self.robot_qpos_addr + 1] = y - self.centerOfMass[1]  # y-axis position
+        self.data.qpos[self.robot_qpos_addr + 2] = z - self.centerOfMass[2]  # z-axis position
 
     def setVelocity(self, dx, dy, dz):
-        self.data.qvel[self.robot_qpos_addr    ] = dx  # x-axis velocity
-        self.data.qvel[self.robot_qpos_addr + 1] = dy  # y-axis velocity
-        self.data.qvel[self.robot_qpos_addr + 2] = dz  # z-axis velocity
+        self.data.qvel[self.robot_qvel_addr    ] = dx  # x-axis velocity
+        self.data.qvel[self.robot_qvel_addr + 1] = dy  # y-axis velocity
+        self.data.qvel[self.robot_qvel_addr + 2] = dz  # z-axis velocity
 
-        # Set initial pose: rotate 90 degrees around Y-axis
+        # # Set initial pose: rotate 90 degrees around Y-axis
         # rot = R.from_euler('z', 0, degrees=True)
         # quat = rot.as_quat()  # [x, y, z, w] format
 
@@ -193,21 +163,18 @@ class Molecule():
 
     def setAcceleration(self, ddx, ddy, ddz):
         dx, dy, dz = self.getVelocity()
+        
+        dx *= 0.50  # dampening
+        dy *= 0.50  # dampening
+        dz *= 0.50  # dampening
 
-        self.data.qvel[self.robot_qpos_addr    ] = dx + (ddx * self.timestep)
-        self.data.qvel[self.robot_qpos_addr + 1] = dy + (ddy * self.timestep)
-        self.data.qvel[self.robot_qpos_addr + 2] = dz + (ddz * self.timestep)
-
-        # self.data.qacc[self.robot_qpos_addr    ] = ddx * 1  # x-axis acceleration
-        # self.data.qacc[self.robot_qpos_addr + 1] = ddy * 1  # y-axis acceleration
-        # self.data.qacc[self.robot_qpos_addr + 2] = ddz * 1  # z-axis acceleration
-        # print(self.data.qvel[self.robot_qpos_addr: self.robot_qpos_addr + 3])
+        self.data.qvel[self.robot_qvel_addr    ] = dx + (ddx * self.timestep) + ((np.random.rand() * 2 - 1) * 0.01)
+        self.data.qvel[self.robot_qvel_addr + 1] = dy + (ddy * self.timestep) + ((np.random.rand() * 2 - 1) * 0.01)
+        self.data.qvel[self.robot_qvel_addr + 2] = dz + (ddz * self.timestep) + ((np.random.rand() * 2 - 1) * 0.01)
 
     def applyForce(self, magnitude, otherMolecule):
         otherPos = otherMolecule.getPosition()
         selfPos = self.getPosition()
-
-        # print(selfPos)
 
         dx, dy, dz = selfPos[0] - otherPos[0], selfPos[1] - otherPos[1], selfPos[2] - otherPos[2]
         
@@ -219,12 +186,57 @@ class Molecule():
         self.appliedForce = (
             self.appliedForce[0] + dx,
             self.appliedForce[1] + dy,
-            self.appliedForce[2] + dz,
+            self.appliedForce[2] + dz
         )
 
+    def pointTo(self, molecules):
+        dipole = self.getDipole()
+        
+        if dipole == None: return
+
+        position = self.getPosition()
+
+        rotations = []
+        weights = []
+
+        for molecule in molecules:
+            if self == molecule: continue
+
+            otherPosition = molecule.getPosition()
+            deltaPosition = np.array(otherPosition) - np.array(position)
+
+            rotations.append([
+                (math.pi / 2) - math.atan(deltaPosition[1] / deltaPosition[0]),
+                0,
+                (math.pi / 2) - math.atan(deltaPosition[2] / deltaPosition[0])
+            ])
+
+            weights.append(np.linalg.norm(deltaPosition)**2)
+
+        rotations = R.from_euler('xyz', rotations, False)
+
+        targetRotation = rotations.mean(weights) * dipole
+        
+        self.data.qpos[self.robot_qpos_addr + 3: self.robot_qpos_addr + 7] = targetRotation.as_quat()
+
+    def getBondStrength(self, molecule):
+        currentMagnitude = np.linalg.norm(self.dipole)
+        otherMagnitude = np.linalg.norm(molecule.dipole)
+
+        currentDirection = R.from_quat(self.data.qpos[self.robot_qpos_addr + 3: self.robot_qpos_addr + 7])
+        otherDirection = R.from_quat(molecule.data.qpos[molecule.robot_qpos_addr + 3: molecule.robot_qpos_addr + 7])
+
+        currentVector = currentDirection.apply([0, 0, 1])
+        otherVector = otherDirection.apply([0, 0, 1])
+
+        # print(1 - scipy.spatial.distance.cosine(currentVector, otherVector))
+
+        return (1 - scipy.spatial.distance.cosine(currentVector, otherVector)) * (1 - abs(currentMagnitude - otherMagnitude))
+
     def update(self):
-        self.setVelocity(*self.appliedForce)
-        self.appliedForce = (0, 0, 0)
+        # print(self.appliedForce)
+        self.setAcceleration(*self.appliedForce)
+        self.appliedForce = (0, 0, 0, 0, 0, 0)
 
     def hasCollision(self):
         for contact in self.data.contact:

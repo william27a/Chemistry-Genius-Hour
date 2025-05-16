@@ -11,6 +11,8 @@ from molecule import Molecule
 import numpy as np
 import torch
 
+import math
+
 import os
 
 # class TimeoutException(Exception): pass
@@ -44,12 +46,24 @@ def simulate(molecules):
 
   def repulse(molecule1, molecule2):
     forceMagnitude = 0.0
-
+    electronOrbitalRadius = 1.00
     
-    for element1 in molecule1.getElements():
-      for element2 in molecule2.getElements():
+    for element1, charged1 in molecule1.getElements():
+      for element2, charged2 in molecule2.getElements():
+
+        # print((((element1[0] - element2[0]) ** 2) + ((element1[1] - element2[1]) ** 2) + ((element1[2] - element2[2]) ** 2)) ** 0.5)
+
         radius = getRadius(element1, element2)
-        forceMagnitude += getForce(radius)
+
+        # if radius > electronOrbitalRadius / 2:
+        forceMagnitude += 500 * pow(math.e, 3-radius) # getForce(radius) * (charged1 * charged2)
+
+        forceMagnitude -= molecule1.getBondStrength(molecule2) * radius ** (-0.9) # (getForce(radius - (electronOrbitalRadius / 2))) * (charged1 * charged2)
+        # else:
+        #   forceMagnitude += (getForce(radius - (electronOrbitalRadius / 2))) * (charged1 * charged2) * ((-radius * 4 / electronOrbitalRadius) + 1)
+
+    forceMagnitude /= (len(molecule1.getElements()) * len(molecule2.getElements()))
+    forceMagnitude *= 2000.0
 
     molecule1.applyForce(forceMagnitude, molecule2)
     molecule2.applyForce(forceMagnitude, molecule1)
@@ -98,7 +112,7 @@ def runTrainingLoop(xml, hyperparameters):
           modelLines.insert(insertIndex, '            '+geom+'\n')
 
         modelLines.insert(insertIndex, '            <joint type="free" name="robotfree' + str(len(molecules)-1) + '"/>\n')
-        modelLines.insert(insertIndex, '        <body pos=\"0 0 ' + str(len(molecules)-1) + '\" name=\"' + str(len(molecules)-1) + '\">\n')
+        modelLines.insert(insertIndex, '        <body name=\"' + str(len(molecules)-1) + '\">\n')
 
     with open('modelDuplicate.xml', 'w') as out:
       for line in modelLines:
@@ -109,24 +123,39 @@ def runTrainingLoop(xml, hyperparameters):
     # max_steps = max_time / m.opt.timestep
     d = mujoco.MjData(m)
 
+    # print(len(d.qpos))
+    # print(len(d.qvel))
+    # print()
+
     for index, molecule in enumerate(molecules):
       molecule.assignPhysics(m, d, index)
+
+      # print(molecule.robot_qpos_addr)
+
+      spaceSize = 50
+
+      x, y, z = np.random.rand() * spaceSize, np.random.rand() * spaceSize, np.random.rand() * spaceSize
+      molecule.setPosition(x, y, z)
+
+    # return
 
     # robot = Robot(m, d, hyperparameters["visualize"])
 
     with launchViewer(m, d, hyperparameters["render"]) as viewer:
-      step_start = time.time()
-
       if viewer:
       # #   # Access the camera object
         cam = viewer.cam
 
-        cam.azimuth = 30
-        cam.elevation = -30
-        cam.distance = 100
-        cam.lookat[:] = [20, 0, 0]  # what the camera is looking at
+        cam.azimuth = 0
+        cam.elevation = -90
+        cam.distance = 200
+        cam.lookat[:] = [50, 50, 50]  # what the camera is looking at
 
+      step_start = time.time()
       while (not viewer or viewer.is_running()):
+        print(time.time() - step_start)
+        step_start = time.time()
+
         # mj_step can be replaced with code that also evaluates
         # a policy and applies a control signal before stepping the physics.
 
@@ -138,6 +167,10 @@ def runTrainingLoop(xml, hyperparameters):
         simulate(molecules)
         for molecule in molecules:
           molecule.update()
+          molecule.pointTo(molecules)
+          # print(molecule.getDipole())
+          # d.qvel[molecule.robot_qvel_addr+3] = 0.005
+          # print(d.qvel)
 
         mujoco.mj_step(m, d)
 
@@ -172,7 +205,7 @@ def runTrainingLoop(xml, hyperparameters):
 if __name__ == "__main__":
   hyperparameters = {
     "render": True,
-    "fps": 100000
+    "fps": 60
   }
 
   runTrainingLoop("model.xml", hyperparameters)
